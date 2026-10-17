@@ -1,6 +1,6 @@
 .env
-.env.example
+run_log.jsonl
+security_log.jsonl
 .venv/
 __pycache__/
 *.pyc
-run_log.jsonl

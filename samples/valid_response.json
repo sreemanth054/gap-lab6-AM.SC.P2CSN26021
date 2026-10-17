@@ -1,0 +1,44 @@
+{
+    "questions": [
+      {
+        "question": "Which verb is best suited to a stem written at the Evaluate level of Bloom's revised taxonomy?",
+        "options": ["Define", "Explain", "Compute", "Justify"],
+        "answer_index": 3,
+        "source": "corpus/05_bloom_taxonomy_notes.md"
+      },
+      {
+        "question": "In a multiple-choice item, what is the usual name for the incorrect options?",
+        "options": ["Keys", "Distractors", "Stems", "Anchors"],
+        "answer_index": 1,
+        "source": "corpus/03_item_writing_guidelines.pdf"
+      },
+      {
+        "question": "Which practice makes a multiple-choice stem clearer?",
+        "options": [
+          "Stating the problem fully in the stem",
+          "Hiding the key point in the options",
+          "Using double negatives for difficulty",
+          "Leaving the question incomplete"
+        ],
+        "answer_index": 0,
+        "source": "corpus/01_question_design_basics.md"
+      },
+      {
+        "question": "Which action best reduces the risk of an assessment item being overexposed?",
+        "options": [
+          "Reusing the same items every term",
+          "Publishing the full item bank",
+          "Rotating items out of use over time",
+          "Removing all item records"
+        ],
+        "answer_index": 2,
+        "source": "corpus/02_assessment_integrity.txt"
+      },
+      {
+        "question": "Which level sits at the base of Bloom's revised taxonomy?",
+        "options": ["Remember", "Analyse", "Create", "Evaluate"],
+        "answer_index": 0,
+        "source": "corpus/05_bloom_taxonomy_notes.md"
+      }
+    ]
+  }

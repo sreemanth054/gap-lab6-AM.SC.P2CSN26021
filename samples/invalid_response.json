@@ -1,0 +1,44 @@
+{
+    "questions": [
+      {
+        "question": "Which planet is known as the Red Planet?",
+        "options": [
+          "Earth",
+          "Mars",
+          "Jupiter",
+          "Venus"
+        ],
+        "answer_index": 1
+      },
+      {
+        "question": "What is the largest ocean on Earth?",
+        "options": [
+          "Atlantic Ocean",
+          "Indian Ocean",
+          "Pacific Ocean",
+          "Arctic Ocean"
+        ],
+        "answer_index": 2
+      },
+      {
+        "question": "How many continents are there on Earth?",
+        "options": [
+          "Five",
+          "Six",
+          "Seven",
+          "Eight"
+        ],
+        "answer_index": 2
+      },
+      {
+        "question": "Which gas do humans need to breathe?",
+        "options": [
+          "Carbon dioxide",
+          "Oxygen",
+          "Nitrogen",
+          "Hydrogen"
+        ],
+        "answer_index": 1
+      }
+    ]
+  }

@@ -1,7 +1,11 @@
 import json
 import re
 import sys
+import os
+import dotenv
+dotenv.load_dotenv()
 
+from doc_loader import load_corpus, write_ingest_index
 from pydantic import BaseModel, Field, ValidationError, model_validator
 from stub_client import StubError, StubRateLimitError 
 from client import get_client, get_model
@@ -14,15 +18,14 @@ class Question(BaseModel):
     question: str = Field(min_length=5, max_length=500)
     options: list[str] = Field(min_length=4, max_length=4)
     answer_index: int = Field(ge=0, le=3)
+    source: str = Field(min_length=1, max_length=300)
 
     @model_validator(mode="after")
     def validate_answer(self):
         if self.answer_index >= len(self.options):
             raise ValueError("answer_index must point to an existing option")
-
         if len(set(option.strip() for option in self.options)) != len(self.options):
             raise ValueError("options must be unique")
-
         return self
 
 
@@ -75,9 +78,17 @@ def looks_like_refusal(text: str) -> bool:
     return any(re.search(pattern, lower_text) for pattern in refusal_patterns)
 
 
-def build_prompt(topic: str) -> str:
+def build_prompt(topic: str, documents: list[dict]) -> str:
+    material = "\n\n".join(
+        f"--- DOCUMENT: {doc['source']} ---\n{doc['text']}" for doc in documents
+    )
     return f"""
 Generate exactly five multiple-choice questions about: {topic}
+
+Base the questions on the reference material below.
+
+REFERENCE MATERIAL:
+{material}
 
 Return ONLY a JSON object in this exact structure:
 
@@ -85,13 +96,9 @@ Return ONLY a JSON object in this exact structure:
   "questions": [
     {{
       "question": "question text",
-      "options": [
-        "option 1",
-        "option 2",
-        "option 3",
-        "option 4"
-      ],
-      "answer_index": 0
+      "options": ["option 1", "option 2", "option 3", "option 4"],
+      "answer_index": 0,
+      "source": "path of the document this question came from"
     }}
   ]
 }}
@@ -101,6 +108,7 @@ Rules:
 - Each question must have exactly four options.
 - answer_index must be 0, 1, 2, or 3.
 - answer_index identifies the correct option in the options list.
+- source must be the exact path shown after "DOCUMENT:" for the document the question came from.
 - Do not use Markdown code fences.
 - Do not add explanations or text before or after the JSON.
 """
@@ -180,7 +188,9 @@ def record(result: dict, status: str, **extra):
 def generate(topic: str):
     client = get_client()
     model = get_model()
-    prompt = build_prompt(topic)
+    documents = load_corpus("corpus")
+    write_ingest_index(documents)
+    prompt = build_prompt(topic, documents)
 
     for attempt in range(1, 4):
         result = call_model(client, model, prompt)
@@ -191,13 +201,15 @@ def generate(topic: str):
 
             if status == "refused":
                 return "refused", None
+
             if status == "invalid_output" and attempt == 1:
                 prompt = (
-                    build_prompt(topic) +
+                    build_prompt(topic, documents) +
                     "\n\nYour previous response was invalid. "
                     "Return ONLY valid JSON matching the required schema."
                 )
                 continue
+
             return status, paper
 
         record(
@@ -220,7 +232,6 @@ def generate(topic: str):
 
         delay += random.uniform(0, 1)
         delay = min(delay, 8)
-
         time.sleep(delay)
 
     return "error", None
