@@ -1,7 +1,7 @@
 [
   {
     "repo": "gap-lab6-AM.SC.P2CSN26021",
-    "awarded": 4.7,
+    "awarded": 6.7,
     "total": 8.5,
     "gates": [
       {
@@ -21,8 +21,8 @@
       },
       {
         "name": "All required files present",
-        "passed": false,
-        "note": "missing: samples/tool_trace.jsonl"
+        "passed": true,
+        "note": ""
       },
       {
         "name": "Logs ignored and never committed",
@@ -91,22 +91,22 @@
         "group": "D",
         "name": "get_tool_schemas() returns both tools",
         "marks": 0.3,
-        "passed": false,
-        "note": "could not import tools: NotImplementedError: TODO 4: get_tool_schemas"
+        "passed": true,
+        "note": ""
       },
       {
         "group": "D",
         "name": "topic_lookup parameters match its Pydantic model",
         "marks": 0.35,
-        "passed": false,
-        "note": "not reached"
+        "passed": true,
+        "note": ""
       },
       {
         "group": "D",
         "name": "question_lookup parameters match its Pydantic model",
         "marks": 0.35,
-        "passed": false,
-        "note": "not reached"
+        "passed": true,
+        "note": ""
       },
       {
         "group": "E",
@@ -119,8 +119,8 @@
         "group": "E",
         "name": "A call that fails the argument model is refused and logged",
         "marks": 0.5,
-        "passed": false,
-        "note": "no tool_arg_rejected event for the call with the required argument missing; events none"
+        "passed": true,
+        "note": ""
       },
       {
         "group": "E",
@@ -133,8 +133,8 @@
         "group": "E",
         "name": "stub:toolcall -> the malformed stored row is rejected",
         "marks": 0.5,
-        "passed": false,
-        "note": "the row with no text field was not reported as tool_result_rejected"
+        "passed": true,
+        "note": ""
       },
       {
         "group": "E",
@@ -155,7 +155,7 @@
         "name": "samples/tool_trace.jsonl: well-formed, counts agree",
         "marks": 0.5,
         "passed": false,
-        "note": "samples/tool_trace.jsonl missing"
+        "note": "a line has no role; no tool calls in the trace"
       }
     ]
   }

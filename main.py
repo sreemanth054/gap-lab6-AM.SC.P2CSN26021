@@ -6,6 +6,8 @@ import dotenv
 dotenv.load_dotenv()
 import security
 
+from pathlib import Path
+from tools import MAX_TOOL_STEPS, get_tool_schemas, run_tool
 from doc_loader import load_corpus, write_ingest_index
 from pydantic import BaseModel, Field, ValidationError, model_validator
 from stub_client import StubError, StubRateLimitError 
@@ -118,48 +120,81 @@ Rules:
 """
 
 
-def call_model(client, model: str, prompt: str) -> dict:
-    """Make ONE model call and time it. It does not log; it reports what happened."""
+
+def call_model(
+    client,
+    model: str,
+    prompt: str = "",
+    messages: list[dict] | None = None,
+    tool_schemas: list[dict] | None = None,
+) -> dict:
+    """Make one model call, preserving any tool calls in the response."""
+
     error = None
     response = None
 
+    if messages is None:
+        messages = [{"role": "user", "content": prompt}]
+
+    request = {
+        "model": model,
+        "messages": messages,
+        "temperature": TEMPERATURE,
+        "max_tokens": MAX_TOKENS,
+    }
+
+    if tool_schemas:
+        request["tools"] = tool_schemas
+
     with Timer() as timer:
         try:
-            response = client.chat.completions.create(
-                model=model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=TEMPERATURE,
-                max_tokens=MAX_TOKENS,
-            )
+            response = client.chat.completions.create(**request)
         except Exception as exc:
             error = exc
 
     if error is not None:
-        # The call never completed, so tokens and cost are unknown: None, not 0.
         return {
-            "error": error, "text": "", "model": model,
-            "prompt_tokens": None, "completion_tokens": None,
-            "estimated": False, "latency_ms": timer.ms,
+            "error": error,
+            "text": "",
+            "message": None,
+            "tool_calls": [],
+            "model": model,
+            "prompt_tokens": None,
+            "completion_tokens": None,
+            "estimated": False,
+            "latency_ms": timer.ms,
         }
 
-    text = response.choices[0].message.content or ""
+    message = response.choices[0].message
+    text = message.content or ""
+    tool_calls = getattr(message, "tool_calls", None) or []
+
     usage = getattr(response, "usage", None)
     prompt_tokens = getattr(usage, "prompt_tokens", None)
     completion_tokens = getattr(usage, "completion_tokens", None)
     estimated = False
 
-    # Usage missing or zeroed: fall back to our own estimate and say so.
-    if (prompt_tokens is None or completion_tokens is None
-            or (prompt_tokens == 0 and completion_tokens == 0)):
-        prompt_tokens = estimate_tokens(prompt)
+    if (
+        prompt_tokens is None
+        or completion_tokens is None
+        or (prompt_tokens == 0 and completion_tokens == 0)
+    ):
+        prompt_tokens = estimate_tokens(
+            json.dumps(messages, ensure_ascii=False)
+        )
         completion_tokens = estimate_tokens(text)
         estimated = True
 
     return {
-        "error": None, "text": text,
+        "error": None,
+        "text": text,
+        "message": message,
+        "tool_calls": tool_calls,
         "model": getattr(response, "model", None) or model,
-        "prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens,
-        "estimated": estimated, "latency_ms": timer.ms,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "estimated": estimated,
+        "latency_ms": timer.ms,
     }
 
 
@@ -195,34 +230,171 @@ def record(result: dict, status: str, **extra):
     )
 
 
+
+def call_with_tools(client, model: str, prompt: str):
+    """Run the model/tool loop, enforcing the documented step cap."""
+    schemas = get_tool_schemas()
+    messages = [{"role": "user", "content": prompt}]
+    trace = [{
+        "type": "request",
+        "model": model,
+        "messages": messages.copy(),
+        "tools": schemas,
+    }]
+    tool_steps = 0
+
+    while True:
+        result = call_model(
+            client,
+            model,
+            messages=messages,
+            tool_schemas=schemas,
+        )
+
+        if result["error"] is not None:
+            return result, False
+
+        calls = result["tool_calls"]
+
+        # No tool calls means the model has produced its final reply.
+        if not calls:
+            if tool_steps:
+                trace.append({
+                    "type": "final_reply",
+                    "message": {
+                        "role": "assistant",
+                        "content": result["text"],
+                    },
+                })
+                trace_path = Path("samples/tool_trace.jsonl")
+                trace_path.parent.mkdir(parents=True, exist_ok=True)
+                trace_path.write_text(
+                    "".join(
+                        json.dumps(item, ensure_ascii=False) + "\n"
+                        for item in trace
+                    ),
+                    encoding="utf-8",
+                )
+            return result, False
+
+        record(result, "tool_call", tool_count=len(calls))
+
+        # Permit at most MAX_TOOL_STEPS tool-call rounds.
+        if tool_steps >= MAX_TOOL_STEPS:
+            security.log_event(
+                security.LOOP_CAP_REACHED,
+                where="main.py:call_with_tools",
+                detail=f"Stopped after {MAX_TOOL_STEPS} tool rounds",
+            )
+            return result, True
+
+        message = result["message"]
+        assistant_message = {
+    "role": "assistant",
+    "content": message.content,
+    "tool_calls": [
+        {
+            "id": call.id,
+            "type": "function",
+            "function": {
+                "name": call.function.name,
+                "arguments": call.function.arguments,
+            },
+        }
+        for call in calls
+    ],
+}
+        messages.append(assistant_message)
+
+        for call in calls:
+            call_id = call.id
+            name = call.function.name
+            raw_arguments = call.function.arguments
+
+            trace.append({
+                "type": "tool_call",
+                "tool_call": {
+                    "id": call_id,
+                    "name": name,
+                    "arguments": raw_arguments,
+                },
+            })
+
+            try:
+                arguments = json.loads(raw_arguments)
+                if not isinstance(arguments, dict):
+                    raise ValueError("Tool arguments must be a JSON object")
+                tool_result = run_tool(name, arguments)
+            except (json.JSONDecodeError, ValueError, TypeError):
+                security.log_event(
+                    security.TOOL_ARG_REJECTED,
+                    where="main.py:call_with_tools",
+                    detail=f"Rejected malformed arguments for {name}",
+                )
+                tool_result = {"error": "Tool arguments rejected"}
+
+            content = json.dumps(tool_result, ensure_ascii=False, default=str)
+
+            trace.append({
+                "type": "tool_result",
+                "tool_call_id": call_id,
+                "name": name,
+                "content": content,
+            })
+
+            messages.append({
+                "role": "tool",
+                "tool_call_id": call_id,
+                "content": content,
+            })
+
+        tool_steps += 1
+
+
 def generate(topic: str):
     client = get_client()
     model = get_model()
     documents = load_corpus("corpus")
     write_ingest_index(documents)
+
     allowed_sources = {doc["source"] for doc in documents}
-    documents = [security.sanitise_document(doc) for doc in documents]
-    prompt = build_prompt(topic, documents)
+    documents = [
+        security.sanitise_document(doc) for doc in documents
+    ]
+    base_prompt = build_prompt(topic, documents)
 
     for attempt in range(1, 4):
-        result = call_model(client, model, prompt)
+        prompt = base_prompt
+        if attempt == 2:
+            prompt += (
+                "\n\nYour previous response was invalid. "
+                "Return ONLY valid JSON matching the required schema."
+            )
+
+        result, loop_capped = call_with_tools(
+            client, model, prompt
+        )
+
+        if loop_capped:
+            return "invalid_output", None
 
         if result["error"] is None:
-            status, paper = classify(result["text"], allowed_sources)
+            status, paper = classify(
+                result["text"], allowed_sources
+            )
             record(result, status)
 
             if status == "refused":
                 return "refused", None
 
-            if status == "invalid_output" and attempt == 1:
-                prompt = (
-                    build_prompt(topic, documents) +
-                    "\n\nYour previous response was invalid. "
-                    "Return ONLY valid JSON matching the required schema."
-                )
+            if status == "ok":
+                return "ok", paper
+
+            # Exactly one repair retry for invalid output.
+            if attempt == 1:
                 continue
 
-            return status, paper
+            return "invalid_output", None
 
         record(
             result,
@@ -233,20 +405,19 @@ def generate(topic: str):
         if attempt == 3:
             return "error", None
 
-        delay = min(2 ** attempt, 8)
+        import random
+        import time
 
+        delay = min(2 ** attempt, 8)
         retry_after = getattr(result["error"], "retry_after", None)
         if retry_after is not None:
             delay = max(delay, retry_after)
 
-        import random
-        import time
-
-        delay += random.uniform(0, 1)
-        delay = min(delay, 8)
+        delay = min(delay + random.uniform(0, 1), 8)
         time.sleep(delay)
 
     return "error", None
+
 
 
 def main():
@@ -264,6 +435,8 @@ def main():
     try:
         status, paper = generate(topic)
     except Exception:
+        import traceback
+        traceback.print_exc()
         print("error")
         sys.exit(1)
 
