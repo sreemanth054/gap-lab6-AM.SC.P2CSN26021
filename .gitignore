@@ -4,3 +4,4 @@ security_log.jsonl
 .venv/
 __pycache__/
 *.pyc
+.stub_calls.log
