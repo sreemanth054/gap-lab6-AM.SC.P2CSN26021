@@ -1,0 +1,3 @@
+What is your average number of model calls per question paper, and what does the gap between that number and 1.0 tell you about your prompt?
+
+My average was 2.4 model calls per question paper. The gap from 1.0 shows that my prompt did not always produce a usable response on the first attempt. Some calls needed retries because of model errors and rate limits, so the higher average reflects both prompt/output issues and transient provider failures.
