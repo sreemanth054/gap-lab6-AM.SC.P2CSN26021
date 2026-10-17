@@ -1,17 +1,29 @@
-## 2026-10-04 - Add bounded retries for model errors
+## 2026-10-17: Remove instruction-like sentences by wording pattern
 
-During Checkpoint 4, I added retry handling for model errors. A failed model call can now be retried up to three attempts, with exponential backoff, jitter, and support for the provider's `Retry-After` value.
+**Decision:** `sanitise_document` removes any sentence matching one of nine instruction patterns before the prompt is built, and logs `guardrail_input` and `instruction_ignored` with the file and line.
+**Rejected:** deleting the two exact payload strings, and relying on a prompt line that says the documents are untrusted. stub:obedient generates its marker itself and matches phrasings, so removing a string does not stop it, and no prompt wording changes what it does.
+**Cost:** a reworded payload can pass, and a legitimate sentence that matches a pattern is deleted.
 
-I could have retried only once for every error, but that would not match the required error policy. I also could have retried indefinitely, but that could lead to unbounded model calls and cost. I chose the bounded three-attempt approach.
+## 2026-10-17: Check the reply's content after the schema passes
 
-## 2026-10-04 - Add exactly one repair retry for invalid output
+**Decision:** `check_paper` rejects a reply whose `source` is not an ingested document, or whose question or option text carries instruction wording, an approval claim, a "verification code" mention or a code-shaped marker. A rejected reply gets the one repair retry.
+**Rejected:** trusting the Pydantic schema alone. The poisoned replies were valid JSON and the run ended `ok`.
+**Cost:** a wrong `source` that is a real ingested path still passes.
 
-I added a separate repair retry for `invalid_output`. When the first response cannot be parsed or fails Pydantic validation, the program makes exactly one additional model call with an instruction to return only valid JSON.
+## 2026-10-17: A tool argument is a search term, never a path
 
-I could have treated invalid output as a final failure immediately, but that would unnecessarily discard responses that could be fixed with a simple repair prompt. I also rejected repeated repair attempts because they could cause unnecessary model calls and spending.
+**Decision:** neither tool takes a filename. `load_data_file` is the only place a path is built, from a name in my own code, checked against `ALLOWED_FILES`, resolved, then tested with `Path.is_relative_to`.
+**Rejected:** letting the model pass a file name and checking the string with `startswith`, which is also true for `data_backup`.
+**Cost:** the tools can only search the two stored files.
 
-## 2026-10-04 - Test retries and failure handling with the stub
+## 2026-10-18: Ignore extra tool arguments instead of forbidding them
 
-I tested the new retry behavior using the stub modes `flaky`, `ratelimit`, `malformed`, `badshape`, and `empty`. I also verified that refusals are not retried and that normal `ok`, `fenced`, and `preamble` responses still require only one model call.
+**Decision:** the argument models use Pydantic's default, so an unexpected field is ignored and only `query` and `limit` are ever read.
+**Rejected:** `extra="forbid"`, which I added first. stub:toolcall and stub:neverstop send `{"query": ..., "source": "topics.json"}`, so forbidding it would refuse the call and the tool would never run.
+**Cost:** a bad extra field is not logged.
 
-I could have tested only the normal successful response, but that would not demonstrate that the retry limits and repair behavior actually work. The tests confirmed that every attempt is logged and that the expected final status is returned.
+## 2026-10-18: Block duplicates in code before storage
+
+**Decision:** `store_questions` compares each question's text, lower-cased, with the stored rows, skips a repeat and logs `duplicate_blocked`.
+**Rejected:** relying on the model to call `question_lookup` and avoid repeats. A model can forget to check, and only code makes a repeat impossible.
+**Cost:** a repeat with different wording is stored.

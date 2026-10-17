@@ -6,6 +6,7 @@ import dotenv
 dotenv.load_dotenv()
 import security
 
+from datetime import datetime, timezone
 from pathlib import Path
 from tools import MAX_TOOL_STEPS, get_tool_schemas, run_tool
 from doc_loader import load_corpus, write_ingest_index
@@ -231,17 +232,27 @@ def record(result: dict, status: str, **extra):
 
 
 
+
 def call_with_tools(client, model: str, prompt: str):
-    """Run the model/tool loop, enforcing the documented step cap."""
+    """Run the model/tool loop and save a valid conversation trace."""
     schemas = get_tool_schemas()
     messages = [{"role": "user", "content": prompt}]
-    trace = [{
-        "type": "request",
-        "model": model,
-        "messages": messages.copy(),
-        "tools": schemas,
-    }]
     tool_steps = 0
+
+    def write_trace():
+        trace_path = (
+            Path(__file__).resolve().parent
+            / "samples"
+            / "tool_trace.jsonl"
+        )
+        trace_path.parent.mkdir(parents=True, exist_ok=True)
+        trace_path.write_text(
+            "".join(
+                json.dumps(message, ensure_ascii=False, default=str) + "\n"
+                for message in messages
+            ),
+            encoding="utf-8",
+        )
 
     while True:
         result = call_model(
@@ -256,99 +267,156 @@ def call_with_tools(client, model: str, prompt: str):
 
         calls = result["tool_calls"]
 
-        # No tool calls means the model has produced its final reply.
         if not calls:
+            messages.append({
+                "role": "assistant",
+                "content": result["text"],
+            })
+
             if tool_steps:
-                trace.append({
-                    "type": "final_reply",
-                    "message": {
-                        "role": "assistant",
-                        "content": result["text"],
-                    },
-                })
-                trace_path = Path("samples/tool_trace.jsonl")
-                trace_path.parent.mkdir(parents=True, exist_ok=True)
-                trace_path.write_text(
-                    "".join(
-                        json.dumps(item, ensure_ascii=False) + "\n"
-                        for item in trace
-                    ),
-                    encoding="utf-8",
-                )
+                write_trace()
+
             return result, False
 
         record(result, "tool_call", tool_count=len(calls))
 
-        # Permit at most MAX_TOOL_STEPS tool-call rounds.
         if tool_steps >= MAX_TOOL_STEPS:
             security.log_event(
-                security.LOOP_CAP_REACHED,
+                "loop_cap_reached",
                 where="main.py:call_with_tools",
                 detail=f"Stopped after {MAX_TOOL_STEPS} tool rounds",
             )
             return result, True
 
-        message = result["message"]
         assistant_message = {
-    "role": "assistant",
-    "content": message.content,
-    "tool_calls": [
-        {
-            "id": call.id,
-            "type": "function",
-            "function": {
-                "name": call.function.name,
-                "arguments": call.function.arguments,
-            },
+            "role": "assistant",
+            "content": result["message"].content,
+            "tool_calls": [
+                {
+                    "id": call.id,
+                    "type": "function",
+                    "function": {
+                        "name": call.function.name,
+                        "arguments": call.function.arguments,
+                    },
+                }
+                for call in calls
+            ],
         }
-        for call in calls
-    ],
-}
         messages.append(assistant_message)
 
         for call in calls:
-            call_id = call.id
-            name = call.function.name
-            raw_arguments = call.function.arguments
-
-            trace.append({
-                "type": "tool_call",
-                "tool_call": {
-                    "id": call_id,
-                    "name": name,
-                    "arguments": raw_arguments,
-                },
-            })
-
             try:
-                arguments = json.loads(raw_arguments)
+                arguments = json.loads(call.function.arguments)
+
                 if not isinstance(arguments, dict):
                     raise ValueError("Tool arguments must be a JSON object")
-                tool_result = run_tool(name, arguments)
+
+                tool_result = run_tool(call.function.name, arguments)
+
             except (json.JSONDecodeError, ValueError, TypeError):
                 security.log_event(
-                    security.TOOL_ARG_REJECTED,
+                    "tool_arg_rejected",
                     where="main.py:call_with_tools",
-                    detail=f"Rejected malformed arguments for {name}",
+                    detail=f"Malformed arguments for {call.function.name}",
                 )
                 tool_result = {"error": "Tool arguments rejected"}
 
-            content = json.dumps(tool_result, ensure_ascii=False, default=str)
-
-            trace.append({
-                "type": "tool_result",
-                "tool_call_id": call_id,
-                "name": name,
-                "content": content,
-            })
-
             messages.append({
                 "role": "tool",
-                "tool_call_id": call_id,
-                "content": content,
+                "tool_call_id": call.id,
+                "content": json.dumps(
+                    tool_result,
+                    ensure_ascii=False,
+                    default=str,
+                ),
             })
 
         tool_steps += 1
+
+
+
+def store_questions(topic: str, paper, allowed_sources: set[str]):
+    """Store only new questions with valid source paths."""
+    store_path = (
+        Path(__file__).resolve().parent
+        / "data"
+        / "generated_questions.json"
+    )
+
+    data = json.loads(store_path.read_text(encoding="utf-8"))
+
+    if not isinstance(data, dict) or not isinstance(data.get("questions"), list):
+        raise RuntimeError("Question store has an invalid structure")
+
+    existing = data["questions"]
+    existing_texts = {
+        row["text"].strip().casefold()
+        for row in existing
+        if isinstance(row, dict) and isinstance(row.get("text"), str)
+    }
+
+    used_ids = {
+        row["id"]
+        for row in existing
+        if isinstance(row, dict) and isinstance(row.get("id"), str)
+    }
+
+    numeric_ids = [
+        int(qid[1:])
+        for qid in used_ids
+        if qid.startswith("Q") and qid[1:].isdigit()
+    ]
+    next_id = max(numeric_ids, default=0) + 1
+
+    allowed = {source.replace("\\", "/") for source in allowed_sources}
+    added = 0
+    duplicates = 0
+
+    for question in paper.questions:
+        source = question.source.replace("\\", "/")
+
+        if source not in allowed:
+            raise ValueError(
+                f"Question source is not in the ingested corpus: {source}"
+            )
+
+        text_key = question.question.strip().casefold()
+
+        if text_key in existing_texts:
+            security.log_event(
+                "duplicate_blocked",
+                where="main.py:store_questions",
+                detail="A duplicate question was not stored",
+            )
+            duplicates += 1
+            continue
+
+        while f"Q{next_id:04d}" in used_ids:
+            next_id += 1
+
+        question_id = f"Q{next_id:04d}"
+        existing.append({
+            "id": question_id,
+            "topic": topic,
+            "text": question.question,
+            "source": source,
+            "created": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        })
+
+        existing_texts.add(text_key)
+        used_ids.add(question_id)
+        next_id += 1
+        added += 1
+        
+
+    if added:
+        store_path.write_text(
+            json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+
+    return added, duplicates
 
 
 def generate(topic: str):
@@ -365,6 +433,7 @@ def generate(topic: str):
 
     for attempt in range(1, 4):
         prompt = base_prompt
+
         if attempt == 2:
             prompt += (
                 "\n\nYour previous response was invalid. "
@@ -388,6 +457,17 @@ def generate(topic: str):
                 return "refused", None
 
             if status == "ok":
+                added, duplicates = store_questions(
+                    topic, paper, allowed_sources
+                )
+
+                if duplicates:
+                    print(
+                        f"Duplicate prevention: skipped {duplicates} "
+                        f"duplicate question(s); stored {added} "
+                        f"new question(s)."
+                    )
+
                 return "ok", paper
 
             # Exactly one repair retry for invalid output.
@@ -410,6 +490,7 @@ def generate(topic: str):
 
         delay = min(2 ** attempt, 8)
         retry_after = getattr(result["error"], "retry_after", None)
+
         if retry_after is not None:
             delay = max(delay, retry_after)
 
@@ -417,6 +498,7 @@ def generate(topic: str):
         time.sleep(delay)
 
     return "error", None
+
 
 
 

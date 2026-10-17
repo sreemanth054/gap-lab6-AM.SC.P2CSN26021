@@ -185,6 +185,7 @@ _CLAIMS = [(name, re.compile(rx, re.IGNORECASE if name != "marker_token" else 0)
            for name, rx in _CLAIM_PATTERNS]
 
 
+
 def check_paper(paper, allowed_sources: set) -> bool:
     """Content check on a reply that already passed the schema.
 
@@ -195,10 +196,12 @@ def check_paper(paper, allowed_sources: set) -> bool:
 
     for number, q in enumerate(paper.questions, start=1):
         rules = []
+
         if q.source not in allowed_sources:
             rules.append("source_not_in_ingest_list")
 
         texts = [q.question, *q.options]
+
         for name, rx in _COMPILED + _CLAIMS:
             if any(rx.search(text) for text in texts):
                 rules.append(name)
@@ -212,5 +215,16 @@ def check_paper(paper, allowed_sources: set) -> bool:
             where="security.py:check_paper",
             detail=f"question {number} rejected: {', '.join(rules)}",
         )
+
+    # Record that the output guardrail ran, even when no problems were found.
+    log_event(
+        GUARDRAIL_OUTPUT,
+        where="security.py:check_paper",
+        detail=(
+            "output guardrail passed"
+            if not problems
+            else "output guardrail rejected content"
+        ),
+    )
 
     return not problems
