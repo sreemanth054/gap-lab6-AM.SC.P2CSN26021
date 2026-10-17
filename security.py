@@ -110,3 +110,107 @@ def read_events(path: Path | str = LOG_PATH) -> list[dict]:
         except json.JSONDecodeError:
             continue
     return events
+
+import re
+
+_INSTRUCTION_PATTERNS = [
+    ("override_previous", r"\b(ignore|disregard|forget)\b.{0,40}\b(previous|prior|above|earlier|all)\b.{0,40}\b(instructions?|rules?|prompts?|topic list)\b"),
+    ("new_instructions", r"\bnew\s+instructions?\b"),
+    ("addressed_to_model", r"\binstructions?\s+(for|to)\s+the\s+(assistant|model|ai|llm)\b"),
+    ("system_note", r"\bsystem\s+(note|message|prompt|override)\s*:"),
+    ("append_code", r"\b(append|add|attach|include|insert)\b.{0,40}\b(verification|tracking|internal)\b.{0,20}\bcode\b"),
+    ("takes_precedence", r"\btakes?\s+precedence\s+over\b"),
+    ("policy_changed", r"\bpolic(y|ies)\b.{0,40}\b(has|have)\s+changed\b"),
+    ("skip_review", r"\b(review|approval|check)\s+step\b.{0,60}\b(skipped|bypassed|omitted)\b"),
+    ("record_source_as", r"\brecord\s+the\s+source\b.{0,80}\bas\b"),
+]
+
+_COMPILED = [
+    (name, re.compile(pattern, re.IGNORECASE | re.DOTALL))
+    for name, pattern in _INSTRUCTION_PATTERNS
+]
+
+_SENTENCE = re.compile(r"[^.!?]+(?:[.!?]+|$)", re.DOTALL)
+
+
+def sanitise_document(doc: dict) -> dict:
+    """Remove sentences that read like instructions aimed at the model.
+
+    Returns a copy of the document with the cleaned text and the new char count.
+    The four document keys are kept. Logs guardrail_input once per document that
+    was changed, and instruction_ignored once per removed sentence.
+    """
+    text = doc["text"]
+    kept = []
+    removed = []
+
+    for match in _SENTENCE.finditer(text):
+        sentence = match.group(0)
+        rule = next((name for name, rx in _COMPILED if rx.search(sentence)), None)
+
+        if rule is None:
+            kept.append(sentence)
+            continue
+
+        start = match.start() + (len(sentence) - len(sentence.lstrip()))
+        line = text.count("\n", 0, start) + 1
+        snippet = " ".join(sentence.split())[:60]
+        removed.append((line, rule, snippet))
+
+    if not removed:
+        return doc
+
+    log_event(
+        GUARDRAIL_INPUT,
+        where="security.py:sanitise_document",
+        detail=f"removed {len(removed)} instruction-like sentence(s) from {doc['source']}",
+    )
+    for line, rule, snippet in removed:
+        log_event(
+            INSTRUCTION_IGNORED,
+            where="security.py:sanitise_document",
+            detail=f"{doc['source']} line {line} rule={rule}: {snippet}",
+        )
+
+    cleaned = "".join(kept)
+    return {**doc, "text": cleaned, "chars": len(cleaned)}
+
+_CLAIM_PATTERNS = [
+    ("approval_claim", r"\bapproved\s+by\b"),
+    ("verification_code", r"\bverification\s+code\b"),
+    ("marker_token", r"\b[A-Z]{3,}-[0-9A-F]{4}\b"),
+]
+
+_CLAIMS = [(name, re.compile(rx, re.IGNORECASE if name != "marker_token" else 0))
+           for name, rx in _CLAIM_PATTERNS]
+
+
+def check_paper(paper, allowed_sources: set) -> bool:
+    """Content check on a reply that already passed the schema.
+
+    Returns True if the paper is clean. Logs one guardrail_output event per
+    offending question, naming the question number and the rules it broke.
+    """
+    problems = []
+
+    for number, q in enumerate(paper.questions, start=1):
+        rules = []
+        if q.source not in allowed_sources:
+            rules.append("source_not_in_ingest_list")
+
+        texts = [q.question, *q.options]
+        for name, rx in _COMPILED + _CLAIMS:
+            if any(rx.search(text) for text in texts):
+                rules.append(name)
+
+        if rules:
+            problems.append((number, rules))
+
+    for number, rules in problems:
+        log_event(
+            GUARDRAIL_OUTPUT,
+            where="security.py:check_paper",
+            detail=f"question {number} rejected: {', '.join(rules)}",
+        )
+
+    return not problems

@@ -1,0 +1,162 @@
+[
+  {
+    "repo": "gap-lab6-AM.SC.P2CSN26021",
+    "awarded": 4.7,
+    "total": 8.5,
+    "gates": [
+      {
+        "name": "client.py unmodified",
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "lab-6-submission tag present",
+        "passed": false,
+        "note": "run: git tag lab-6-submission && git push origin --tags"
+      },
+      {
+        "name": ".env never committed, on any branch",
+        "passed": true,
+        "note": ""
+      },
+      {
+        "name": "All required files present",
+        "passed": false,
+        "note": "missing: samples/tool_trace.jsonl"
+      },
+      {
+        "name": "Logs ignored and never committed",
+        "passed": true,
+        "note": ""
+      }
+    ],
+    "checks": [
+      {
+        "group": "A",
+        "name": "data/ingest_index.json written, one entry per document",
+        "marks": 0.4,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "group": "A",
+        "name": "Both hard formats ingested, every document non-empty",
+        "marks": 0.3,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "group": "A",
+        "name": "A stored question traceable to an ingested document",
+        "marks": 0.3,
+        "passed": false,
+        "note": "0 new question(s), none citing an ingested source"
+      },
+      {
+        "group": "B",
+        "name": "stub:obedient, overt block -> marker never stored or printed",
+        "marks": 0.75,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "group": "B",
+        "name": "stub:obedient, speaker note -> marker never stored or printed",
+        "marks": 0.75,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "group": "C",
+        "name": "stub:badshape -> invalid_output (exit 1)",
+        "marks": 0.6,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "group": "C",
+        "name": "Nothing stored from a reply that failed validation",
+        "marks": 0.4,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "group": "C",
+        "name": "Both an input and an output guardrail actually ran",
+        "marks": 0.5,
+        "passed": false,
+        "note": "events across the injection runs: ['guardrail_input', 'instruction_ignored']"
+      },
+      {
+        "group": "D",
+        "name": "get_tool_schemas() returns both tools",
+        "marks": 0.3,
+        "passed": false,
+        "note": "could not import tools: NotImplementedError: TODO 4: get_tool_schemas"
+      },
+      {
+        "group": "D",
+        "name": "topic_lookup parameters match its Pydantic model",
+        "marks": 0.35,
+        "passed": false,
+        "note": "not reached"
+      },
+      {
+        "group": "D",
+        "name": "question_lookup parameters match its Pydantic model",
+        "marks": 0.35,
+        "passed": false,
+        "note": "not reached"
+      },
+      {
+        "group": "E",
+        "name": "stub:traversal -> nothing outside data/ reaches the model",
+        "marks": 0.7,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "group": "E",
+        "name": "A call that fails the argument model is refused and logged",
+        "marks": 0.5,
+        "passed": false,
+        "note": "no tool_arg_rejected event for the call with the required argument missing; events none"
+      },
+      {
+        "group": "E",
+        "name": "The refused call is handled, not crashed into",
+        "marks": 0.3,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "group": "E",
+        "name": "stub:toolcall -> the malformed stored row is rejected",
+        "marks": 0.5,
+        "passed": false,
+        "note": "the row with no text field was not reported as tool_result_rejected"
+      },
+      {
+        "group": "E",
+        "name": "stub:neverstop -> terminates within the documented cap",
+        "marks": 0.5,
+        "passed": true,
+        "note": ""
+      },
+      {
+        "group": "F",
+        "name": "The same run twice stores nothing new and says so",
+        "marks": 0.5,
+        "passed": false,
+        "note": "no duplicate_blocked event"
+      },
+      {
+        "group": "F",
+        "name": "samples/tool_trace.jsonl: well-formed, counts agree",
+        "marks": 0.5,
+        "passed": false,
+        "note": "samples/tool_trace.jsonl missing"
+      }
+    ]
+  }
+]
